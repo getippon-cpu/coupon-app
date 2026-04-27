@@ -120,6 +120,17 @@ def rotate_b64(b64, angle):
     return to_b64(img)
 
 # ===============================
+# ★ 重要：日付パース修正
+# ===============================
+def parse_ai_date(date_str):
+    if not date_str:
+        return datetime.today().date()
+    try:
+        return datetime.strptime(date_str, "%Y-%m-%d").date()
+    except:
+        return datetime.today().date()
+
+# ===============================
 # JSON
 # ===============================
 def safe_json(text):
@@ -135,7 +146,7 @@ def safe_json(text):
     return {}
 
 # ===============================
-# ★ AI解析（最重要：シンプル指示版）
+# AI
 # ===============================
 def ai_extract(img):
     model_name = get_model()
@@ -154,7 +165,7 @@ def ai_extract(img):
 - 有効期限
 - 備考
 
-必ずJSON形式で出力してください：
+必ずJSONで出力：
 
 {
  "store": "",
@@ -166,12 +177,7 @@ def ai_extract(img):
 """
 
     try:
-        res = model.generate_content(
-            contents=[prompt, img],
-            generation_config={
-                "temperature": 0.0
-            }
-        )
+        res = model.generate_content([prompt, img], generation_config={"temperature": 0.0})
         return safe_json(res.text)
     except:
         return {}
@@ -181,7 +187,7 @@ def ai_extract(img):
 # ===============================
 init_db()
 
-st.title("🎫 クーポン管理（最適プロンプト版）")
+st.title("🎫 クーポン管理（期限反映修正済）")
 
 # ===============================
 # サイドバー
@@ -204,7 +210,7 @@ category_filter = st.selectbox(
 )
 
 # ===============================
-# アップロード
+# 画像
 # ===============================
 file = st.file_uploader("画像アップ", type=["jpg","png","jpeg"])
 
@@ -221,13 +227,19 @@ if file:
     ocr = st.session_state.get("ocr", {})
 
 # ===============================
-# 入力
+# 入力（★ここが修正ポイント）
 # ===============================
 store = st.text_input("店舗名", ocr.get("store",""))
 discount = st.text_input("割引", ocr.get("discount",""))
 category = st.selectbox("カテゴリ", ["飲食","物販","サービス","その他"])
 quantity = st.number_input("枚数", 1, 100, 1)
-expiry = st.date_input("期限")
+
+# ★ここが修正ポイント（AI期限反映）
+expiry = st.date_input(
+    "期限",
+    value=parse_ai_date(ocr.get("expiry", ""))
+)
+
 note = st.text_area("備考（任意）", ocr.get("note",""))
 
 # ===============================
@@ -278,20 +290,6 @@ for item in data:
         if item.get("image"):
             st.image(from_b64(item["image"]), width=120)
 
-            c1, c2 = st.columns(2)
-
-            with c1:
-                if st.button("↺", key=f"l_{item['id']}"):
-                    item["image"] = rotate_b64(item["image"], 90)
-                    save_item(item)
-                    st.rerun()
-
-            with c2:
-                if st.button("↻", key=f"r_{item['id']}"):
-                    item["image"] = rotate_b64(item["image"], -90)
-                    save_item(item)
-                    st.rerun()
-
     with col2:
         st.markdown(f"### {item['store']}")
         st.write(f"{item['discount']} / {item['category']}")
@@ -302,13 +300,10 @@ for item in data:
         else:
             st.write(f"残り日数: {days}日")
 
-        st.write(f"使用: {used} / {qty}（残り {remaining}）")
+        st.write(f"使用: {used} / {qty}")
 
         if item.get("note"):
             st.info(f"📝 {item['note']}")
-
-        if qty > 0:
-            st.progress(used / qty)
 
         c1, c2, c3 = st.columns(3)
 
