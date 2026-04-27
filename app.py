@@ -19,7 +19,7 @@ if not API_KEY:
 
 genai.configure(api_key=API_KEY)
 
-MODEL_NAME = "models/gemini-1.5-flash-latest"
+MODEL_NAME = "models/gemini-1.5-pro"
 
 def get_model():
     return MODEL_NAME
