@@ -4,7 +4,7 @@ import re
 import base64
 import sqlite3
 from datetime import datetime
-from PIL import Image
+from PIL import Image, ImageOps
 from io import BytesIO
 import google.generativeai as genai
 
@@ -22,7 +22,7 @@ def get_model():
     return None
 
 # ===============================
-# DB（SQLite）
+# DB
 # ===============================
 DB_FILE = "coupons.db"
 
@@ -51,19 +51,16 @@ def load_data():
     rows = c.fetchall()
     conn.close()
 
-    data = []
-    for r in rows:
-        data.append({
-            "id": r[0],
-            "store": r[1],
-            "discount": r[2],
-            "category": r[3],
-            "quantity": r[4],
-            "used": r[5],
-            "expiry": r[6],
-            "image": r[7]
-        })
-    return data
+    return [{
+        "id": r[0],
+        "store": r[1],
+        "discount": r[2],
+        "category": r[3],
+        "quantity": r[4],
+        "used": r[5],
+        "expiry": r[6],
+        "image": r[7]
+    } for r in rows]
 
 def save_item(item):
     conn = sqlite3.connect(DB_FILE)
@@ -98,8 +95,15 @@ def reset_db():
     conn.close()
 
 # ===============================
-# 画像
+# 画像処理（②改善ポイント）
 # ===============================
+def fix_orientation(img):
+    """EXIF情報を使って自動回転補正"""
+    try:
+        return ImageOps.exif_transpose(img)
+    except:
+        return img
+
 def to_b64(img):
     buf = BytesIO()
     img.save(buf, format="JPEG")
@@ -134,7 +138,7 @@ def ai_extract(img):
     model = genai.GenerativeModel(model_name)
 
     prompt = """
-クーポン画像を解析しJSON出力：
+クーポン画像からJSON抽出：
 
 {
  "store":"",
@@ -154,33 +158,26 @@ def ai_extract(img):
 # ===============================
 init_db()
 
-st.title("🎫 クーポン管理（SQLite版）")
+st.title("🎫 クーポン管理（使用管理強化版）")
 
 # ===============================
-# 🔴 管理
+# 管理
 # ===============================
 st.sidebar.header("管理")
 
 if st.sidebar.button("⚠️ 全データ初期化"):
     reset_db()
-    st.success("全データ削除")
     st.rerun()
 
 # ===============================
-# フィルタ（①②）
+# フィルタ
 # ===============================
-st.subheader("🔍 フィルタ")
+search = st.text_input("🔍 店名検索")
 
-col1, col2 = st.columns(2)
-
-with col1:
-    search = st.text_input("店名検索")
-
-with col2:
-    category_filter = st.selectbox(
-        "カテゴリ",
-        ["すべて", "飲食", "物販", "サービス", "その他"]
-    )
+category_filter = st.selectbox(
+    "カテゴリ",
+    ["すべて", "飲食", "物販", "サービス", "その他"]
+)
 
 # ===============================
 # アップロード
@@ -191,6 +188,7 @@ img = None
 
 if file:
     img = Image.open(file)
+    img = fix_orientation(img)  # ★ここが重要（回転補正）
     st.image(img)
 
     if st.button("AI解析"):
@@ -205,14 +203,13 @@ store = st.text_input("店舗名", ocr.get("store",""))
 discount = st.text_input("割引", ocr.get("discount",""))
 category = st.selectbox("カテゴリ", ["飲食","物販","サービス","その他"])
 quantity = st.number_input("枚数", 1, 100, 1)
-
 expiry = st.date_input("期限")
 
 # ===============================
 # 保存
 # ===============================
 if st.button("保存"):
-    item = {
+    save_item({
         "id": str(datetime.now().timestamp()),
         "store": store,
         "discount": discount,
@@ -221,10 +218,7 @@ if st.button("保存"):
         "used": 0,
         "expiry": str(expiry),
         "image": to_b64(img) if img else None
-    }
-
-    save_item(item)
-    st.success("保存")
+    })
     st.rerun()
 
 # ===============================
@@ -235,26 +229,28 @@ st.subheader("一覧")
 data = load_data()
 today = datetime.today().date()
 
-# フィルタ処理（①②）
-filtered = []
 for item in data:
+
+    # フィルタ
     if search and search not in item["store"]:
         continue
     if category_filter != "すべて" and item["category"] != category_filter:
         continue
-    filtered.append(item)
 
-# カードUI風表示（④）
-for item in filtered:
+    used = item["used"]
+    qty = item["quantity"]
+    remaining = qty - used
 
-    remaining = item["quantity"] - item["used"]
-
+    # 期限
     try:
         d = datetime.strptime(item["expiry"], "%Y-%m-%d").date()
         days = (d - today).days
     except:
         days = 999
 
+    # ===============================
+    # カード表示
+    # ===============================
     col1, col2 = st.columns([1, 3])
 
     with col1:
@@ -264,8 +260,15 @@ for item in filtered:
     with col2:
         st.markdown(f"### {item['store']}")
         st.write(f"{item['discount']} / {item['category']}")
-        st.write(f"残り: {remaining}枚 / 期限: {item['expiry']}")
 
+        # ★ 使用済み可視化（ここが改善ポイント①）
+        st.write(f"使用状況: {used} / {qty} （残り {remaining}）")
+
+        # シンプルなバー表現
+        if qty > 0:
+            st.progress(used / qty)
+
+        # 期限表示
         if days < 0:
             st.error("期限切れ")
         elif days < 7:
@@ -276,21 +279,21 @@ for item in filtered:
         c1, c2, c3 = st.columns(3)
 
         with c1:
-            if st.button("使用", key=f"u_{item['id']}"):
+            if st.button("使用", key=f"use_{item['id']}"):
                 if item["used"] < item["quantity"]:
                     item["used"] += 1
                     save_item(item)
                     st.rerun()
 
         with c2:
-            if st.button("戻す", key=f"b_{item['id']}"):
+            if st.button("戻す", key=f"back_{item['id']}"):
                 if item["used"] > 0:
                     item["used"] -= 1
                     save_item(item)
                     st.rerun()
 
         with c3:
-            if st.button("削除", key=f"d_{item['id']}"):
+            if st.button("削除", key=f"del_{item['id']}"):
                 delete_item(item["id"])
                 st.rerun()
 
