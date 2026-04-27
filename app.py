@@ -9,16 +9,20 @@ from io import BytesIO
 import google.generativeai as genai
 
 # ===============================
-# API
+# API設定（安定化）
 # ===============================
-genai.configure(api_key=st.secrets.get("GEMINI_API_KEY"))
+API_KEY = st.secrets.get("GEMINI_API_KEY")
+
+if not API_KEY:
+    st.error("GEMINI_API_KEYが設定されていません")
+    st.stop()
+
+genai.configure(api_key=API_KEY)
+
+MODEL_NAME = "gemini-1.5-flash"
 
 def get_model():
-    models = genai.list_models()
-    for m in models:
-        if "generateContent" in str(m.supported_generation_methods):
-            return m.name
-    return None
+    return MODEL_NAME
 
 # ===============================
 # DB
@@ -47,7 +51,6 @@ def init_db():
     conn.close()
 
 def reset_db():
-    """完全リセット（テーブルごと削除→再生成）"""
     conn = sqlite3.connect(DB_FILE)
     c = conn.cursor()
     c.execute("DROP TABLE IF EXISTS coupons")
@@ -109,23 +112,29 @@ def delete_item(item_id):
     conn.close()
 
 # ===============================
-# 画像
+# 画像処理
 # ===============================
 def to_b64(img):
+    if img is None:
+        return ""
     buf = BytesIO()
     img.save(buf, format="JPEG")
     return base64.b64encode(buf.getvalue()).decode()
 
 def from_b64(b):
+    if not b:
+        return None
     return Image.open(BytesIO(base64.b64decode(b)))
 
 def rotate_b64(b64, angle):
     img = from_b64(b64)
+    if img is None:
+        return b64
     img = img.rotate(angle, expand=True)
     return to_b64(img)
 
 # ===============================
-# JSON安全
+# JSON安全化
 # ===============================
 def safe_json(text):
     try:
@@ -140,30 +149,27 @@ def safe_json(text):
     return {}
 
 # ===============================
-# AI解析
+# AI解析（安定版）
 # ===============================
 def ai_extract(img):
-    model_name = get_model()
-    if not model_name:
-        return {}
-
-    model = genai.GenerativeModel(model_name)
+    model = genai.GenerativeModel(MODEL_NAME)
 
     prompt = """
-クーポン画像を解析してJSONで出力：
+必ずJSONのみを返してください。説明は禁止。
 
 {
  "store": "",
  "discount": "",
  "expiry": "YYYY-MM-DD",
- "note": "備考（任意）"
+ "note": ""
 }
 """
 
     try:
         res = model.generate_content([prompt, img])
-        return safe_json(res.text)
-    except:
+        return safe_json(res.text.strip())
+    except Exception as e:
+        st.error(f"AI解析エラー: {e}")
         return {}
 
 # ===============================
@@ -171,16 +177,16 @@ def ai_extract(img):
 # ===============================
 init_db()
 
-st.title("🎫 クーポン管理（DBリセット対応版）")
+st.title("🎫 クーポン管理（安定版）")
 
 # ===============================
-# サイドバー（重要）
+# サイドバー
 # ===============================
 st.sidebar.header("管理")
 
-# ★ DB完全リセットボタン追加
 if st.sidebar.button("🧨 DB完全リセット（全削除）"):
     reset_db()
+    st.session_state.clear()
     st.sidebar.success("DBを初期化しました")
     st.rerun()
 
@@ -200,7 +206,6 @@ category_filter = st.selectbox(
 file = st.file_uploader("画像アップ", type=["jpg", "png", "jpeg"])
 
 img = None
-ocr = st.session_state.get("ocr", {})
 
 if file:
     img = Image.open(file)
@@ -209,17 +214,17 @@ if file:
     if st.button("🤖 AI解析"):
         st.session_state["ocr"] = ai_extract(img)
 
-    ocr = st.session_state.get("ocr", {})
+ocr = st.session_state.get("ocr", {})
 
 # ===============================
 # 入力
 # ===============================
-store = st.text_input("店舗名", ocr.get("store",""))
-discount = st.text_input("割引", ocr.get("discount",""))
-category = st.selectbox("カテゴリ", ["飲食","物販","サービス","その他"])
+store = st.text_input("店舗名", ocr.get("store", ""))
+discount = st.text_input("割引", ocr.get("discount", ""))
+category = st.selectbox("カテゴリ", ["飲食", "物販", "サービス", "その他"])
 quantity = st.number_input("枚数", 1, 100, 1)
 expiry = st.date_input("期限")
-note = st.text_area("備考（任意）", ocr.get("note",""))
+note = st.text_area("備考（任意）", ocr.get("note", ""))
 
 # ===============================
 # 保存
@@ -234,7 +239,7 @@ if st.button("保存"):
         "used": 0,
         "expiry": str(expiry),
         "note": note,
-        "image": to_b64(img) if img else None
+        "image": to_b64(img) if img else ""
     })
     st.rerun()
 
@@ -258,14 +263,17 @@ for item in data:
     remaining = qty - used
 
     try:
-        d = datetime.strptime(item["expiry"], "%Y-%m-%d").date()
-        days = (d - today).days
+        if item["expiry"]:
+            d = datetime.strptime(item["expiry"], "%Y-%m-%d").date()
+            days = (d - today).days
+        else:
+            days = 999
     except:
         days = 999
 
     col1, col2 = st.columns([1, 3])
 
-    # サムネ＋回転
+    # 画像
     with col1:
         if item.get("image"):
             st.image(from_b64(item["image"]), width=120)
@@ -288,7 +296,6 @@ for item in data:
     with col2:
         st.markdown(f"### {item['store']}")
         st.write(f"{item['discount']} / {item['category']}")
-
         st.write(f"📅 期限: {item['expiry']}")
 
         if days < 0:
