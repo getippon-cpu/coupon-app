@@ -6,14 +6,17 @@ import sqlite3
 from datetime import datetime
 from PIL import Image
 from io import BytesIO
-from google import genai
+import google.generativeai as genai
 
 # ===============================
-# Gemini（新SDK）
+# Gemini（旧SDK）
 # ===============================
-client = genai.Client(api_key=st.secrets["GEMINI_API_KEY"])
+genai.configure(api_key=st.secrets["GEMINI_API_KEY"])
 
-MODEL_NAME = "gemini-1.5-flash"
+MODEL_NAME = "gemini-pro-vision"
+
+def ai_model():
+    return genai.GenerativeModel(MODEL_NAME)
 
 # ===============================
 # DB
@@ -139,9 +142,11 @@ def safe_json(text):
     return {}
 
 # ===============================
-# AI解析（新SDK）
+# AI解析（旧SDK）
 # ===============================
 def ai_extract(img):
+    model = ai_model()
+
     prompt = """
 クーポン画像を解析してJSONのみ返してください。
 
@@ -154,10 +159,7 @@ def ai_extract(img):
 """
 
     try:
-        response = client.models.generate_content(
-            model=MODEL_NAME,
-            contents=[prompt, img]
-        )
+        response = model.generate_content([prompt, img])
         return safe_json(response.text)
 
     except Exception as e:
@@ -169,7 +171,7 @@ def ai_extract(img):
 # ===============================
 init_db()
 
-st.title("🎫 クーポン管理（完全安定版）")
+st.title("🎫 クーポン管理（安定版・旧SDK）")
 
 # ===============================
 # サイドバー
