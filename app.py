@@ -13,7 +13,6 @@ import google.generativeai as genai
 # ===============================
 genai.configure(api_key=st.secrets.get("GEMINI_API_KEY"))
 
-@st.cache_data
 def get_model():
     models = genai.list_models()
     for m in models:
@@ -52,23 +51,29 @@ def load_data():
     rows = c.fetchall()
     conn.close()
 
-    return [{
-        "id": r[0],
-        "store": r[1],
-        "discount": r[2],
-        "category": r[3],
-        "quantity": r[4],
-        "used": r[5],
-        "expiry": r[6],
-        "note": r[7],
-        "image": r[8]
-    } for r in rows]
+    data = []
+    for r in rows:
+        data.append({
+            "id": r[0],
+            "store": r[1],
+            "discount": r[2],
+            "category": r[3],
+            "quantity": r[4],
+            "used": r[5],
+            "expiry": r[6],
+            "note": r[7],
+            "image": r[8]
+        })
+    return data
 
 def save_item(item):
     conn = sqlite3.connect(DB_FILE)
     c = conn.cursor()
+
     c.execute("""
-        INSERT OR REPLACE INTO coupons VALUES (?,?,?,?,?,?,?,?,?)
+        INSERT OR REPLACE INTO coupons
+        (id, store, discount, category, quantity, used, expiry, note, image)
+        VALUES (?,?,?,?,?,?,?,?,?)
     """, (
         item["id"],
         item["store"],
@@ -80,6 +85,7 @@ def save_item(item):
         item.get("note", ""),
         item["image"]
     ))
+
     conn.commit()
     conn.close()
 
@@ -92,12 +98,13 @@ def delete_item(item_id):
 
 def reset_db():
     conn = sqlite3.connect(DB_FILE)
-    conn.execute("DELETE FROM coupons")
+    c = conn.cursor()
+    c.execute("DELETE FROM coupons")
     conn.commit()
     conn.close()
 
 # ===============================
-# 画像
+# 画像処理
 # ===============================
 def to_b64(img):
     buf = BytesIO()
@@ -106,6 +113,11 @@ def to_b64(img):
 
 def from_b64(b):
     return Image.open(BytesIO(base64.b64decode(b)))
+
+def rotate_b64(b64, angle):
+    img = from_b64(b64)
+    img = img.rotate(angle, expand=True)
+    return to_b64(img)
 
 # ===============================
 # JSON安全
@@ -123,7 +135,7 @@ def safe_json(text):
     return {}
 
 # ===============================
-# AI解析（備考追加）
+# AI解析
 # ===============================
 def ai_extract(img):
     model_name = get_model()
@@ -133,18 +145,14 @@ def ai_extract(img):
     model = genai.GenerativeModel(model_name)
 
     prompt = """
-クーポン画像を解析してJSONで出力してください。
-
-以下の形式：
+クーポン画像を解析してJSONで出力してください：
 
 {
  "store": "",
  "discount": "",
  "expiry": "YYYY-MM-DD",
- "note": "補足情報・注意点・備考（なければ空でOK）"
+ "note": "備考（任意・なければ空）"
 }
-
-※備考は自由記述でOK（任意）
 """
 
     try:
@@ -158,7 +166,7 @@ def ai_extract(img):
 # ===============================
 init_db()
 
-st.title("🎫 クーポン管理（備考付きAI版）")
+st.title("🎫 クーポン管理（安定版フル）")
 
 # ===============================
 # 管理
@@ -189,13 +197,9 @@ ocr = st.session_state.get("ocr", {})
 
 if file:
     img = Image.open(file)
-
     st.image(img)
 
-    # ===============================
-    # AI解析
-    # ===============================
-    if st.button("🤖 AI解析", key="ai_extract"):
+    if st.button("🤖 AI解析"):
         st.session_state["ocr"] = ai_extract(img)
 
     ocr = st.session_state.get("ocr", {})
@@ -208,8 +212,6 @@ discount = st.text_input("割引", ocr.get("discount",""))
 category = st.selectbox("カテゴリ", ["飲食","物販","サービス","その他"])
 quantity = st.number_input("枚数", 1, 100, 1)
 expiry = st.date_input("期限")
-
-# ★ 備考（任意入力）
 note = st.text_area("備考（任意）", ocr.get("note",""))
 
 # ===============================
@@ -256,10 +258,30 @@ for item in data:
 
     col1, col2 = st.columns([1, 3])
 
+    # ===============================
+    # サムネイル＋回転（保存あり）
+    # ===============================
     with col1:
         if item.get("image"):
             st.image(from_b64(item["image"]), width=120)
 
+            c1, c2 = st.columns(2)
+
+            with c1:
+                if st.button("↺", key=f"l_{item['id']}"):
+                    item["image"] = rotate_b64(item["image"], 90)
+                    save_item(item)
+                    st.rerun()
+
+            with c2:
+                if st.button("↻", key=f"r_{item['id']}"):
+                    item["image"] = rotate_b64(item["image"], -90)
+                    save_item(item)
+                    st.rerun()
+
+    # ===============================
+    # 情報
+    # ===============================
     with col2:
         st.markdown(f"### {item['store']}")
         st.write(f"{item['discount']} / {item['category']}")
@@ -273,9 +295,8 @@ for item in data:
 
         st.write(f"使用: {used} / {qty}（残り {remaining}）")
 
-        # ★ 備考表示（追加ポイント）
         if item.get("note"):
-            st.info(f"📝 備考: {item['note']}")
+            st.info(f"📝 {item['note']}")
 
         if qty > 0:
             st.progress(used / qty)
