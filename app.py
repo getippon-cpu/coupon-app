@@ -13,6 +13,10 @@ from io import BytesIO
 # ===============================
 genai.configure(api_key=st.secrets.get("GEMINI_API_KEY"))
 
+# ===============================
+# モデル取得（①キャッシュ化）
+# ===============================
+@st.cache_data
 def get_model():
     models = genai.list_models()
     for m in models:
@@ -31,7 +35,8 @@ def load_data():
     return []
 
 def save_data(data):
-    json.dump(data, open(DATA_FILE, "w", encoding="utf-8"), ensure_ascii=False, indent=2)
+    json.dump(data, open(DATA_FILE, "w", encoding="utf-8"),
+              ensure_ascii=False, indent=2)
 
 # ===============================
 # 画像
@@ -45,11 +50,32 @@ def from_b64(b):
     return Image.open(BytesIO(base64.b64decode(b)))
 
 # ===============================
-# AI
+# JSON安全パース（④強化）
+# ===============================
+def safe_json(text):
+    try:
+        return json.loads(text)
+    except:
+        match = re.search(r"\{.*\}", text, re.DOTALL)
+        if match:
+            try:
+                return json.loads(match.group())
+            except:
+                pass
+    return {}
+
+# ===============================
+# AI（②③対応）
 # ===============================
 def ai_extract(img):
 
     model_name = get_model()
+
+    # ② モデル取得失敗対策
+    if not model_name:
+        st.error("利用可能なモデルが見つかりません")
+        return {}
+
     model = genai.GenerativeModel(model_name)
 
     prompt = """
@@ -65,22 +91,21 @@ def ai_extract(img):
 JSONのみ
 """
 
-    res = model.generate_content([prompt, img])
-    raw = res.text
-
-    cleaned = re.sub(r"```json|```", "", raw).strip()
-
     try:
-        return json.loads(cleaned)
-    except:
+        res = model.generate_content([prompt, img])
+        raw = res.text
+    except Exception as e:
+        st.error(f"AIエラー: {e}")
         return {}
+
+    return safe_json(raw)
 
 # ===============================
 # UI
 # ===============================
-st.title("🎫 クーポン管理（完成版）")
+st.title("🎫 クーポン管理（使用枚数管理付き）")
 
-file = st.file_uploader("画像アップ", type=["jpg","png","jpeg"])
+file = st.file_uploader("画像アップ", type=["jpg", "png", "jpeg"])
 
 img = None
 
@@ -94,12 +119,16 @@ if file:
 ocr = st.session_state.get("ocr", {})
 
 # 入力欄
-store = st.text_input("店舗名", value=ocr.get("store",""))
-discount = st.text_input("割引", value=ocr.get("discount",""))
+store = st.text_input("店舗名", value=ocr.get("store", ""))
+discount = st.text_input("割引", value=ocr.get("discount", ""))
 
-# 追加項目
-category = st.selectbox("カテゴリ", ["飲食","物販","サービス","その他"])
-quantity = st.number_input("枚数", 1, 100, 1)
+category = st.selectbox("カテゴリ", ["飲食", "物販", "サービス", "その他"])
+
+# 枚数（総数）
+quantity = st.number_input("枚数（総数）", 1, 100, 1)
+
+# 使用済み枚数（新規登録時は0）
+used = 0
 
 # 日付
 exp_default = datetime.today()
@@ -111,23 +140,27 @@ if ocr.get("expiry"):
 
 expiry = st.date_input("期限", value=exp_default)
 
+# ===============================
 # 保存
+# ===============================
 if st.button("保存"):
 
     data = load_data()
 
     data.append({
+        "id": str(datetime.now().timestamp()),  # 簡易ID
         "store": store,
         "discount": discount,
         "category": category,
         "quantity": quantity,
+        "used": used,
         "expiry": str(expiry),
         "image": to_b64(img) if img else None
     })
 
     save_data(data)
 
-    st.success("保存")
+    st.success("保存しました")
     st.rerun()
 
 # ===============================
@@ -138,26 +171,31 @@ st.subheader("一覧")
 data = load_data()
 today = datetime.today().date()
 
-for i, item in enumerate(data):
+for item in data:
 
-    store = item.get("store","不明")
-    discount = item.get("discount","")
-    category = item.get("category","")
-    qty = item.get("quantity",1)
-    exp = item.get("expiry","")
+    store = item.get("store", "不明")
+    discount = item.get("discount", "")
+    category = item.get("category", "")
+    qty = item.get("quantity", 1)
+    used = item.get("used", 0)
+    exp = item.get("expiry", "")
 
+    remaining = qty - used
+
+    # 期限判定
     try:
-        d = datetime.strptime(exp,"%Y-%m-%d").date()
+        d = datetime.strptime(exp, "%Y-%m-%d").date()
         days = (d - today).days
     except:
         days = 999
 
+    # 表示
     if days < 0:
         st.error(f"{store}（期限切れ）")
     elif days < 7:
-        st.warning(f"{store}（あと{days}日）")
+        st.warning(f"{store}（あと{days}日 / 残り{remaining}枚）")
     else:
-        st.success(f"{store}（{exp}）")
+        st.success(f"{store}（{exp} / 残り{remaining}枚）")
 
     if item.get("image"):
         try:
@@ -167,12 +205,36 @@ for i, item in enumerate(data):
 
     st.write(f"""
 カテゴリ: {category}  
-枚数: {qty}  
-割引: {discount}
+割引: {discount}  
+総数: {qty}  
+使用済: {used}  
+残り: {remaining}
 """)
 
-    if st.button("削除", key=i):
-        data.pop(i)
+    # ===============================
+    # 使用管理（新機能）
+    # ===============================
+    col1, col2 = st.columns(2)
+
+    with col1:
+        if st.button("1枚使用", key=f"use_{item['id']}"):
+            if item["used"] < item["quantity"]:
+                item["used"] += 1
+                save_data(data)
+                st.rerun()
+
+    with col2:
+        if st.button("戻す", key=f"back_{item['id']}"):
+            if item["used"] > 0:
+                item["used"] -= 1
+                save_data(data)
+                st.rerun()
+
+    # ===============================
+    # 削除
+    # ===============================
+    if st.button("削除", key=f"del_{item['id']}"):
+        data.remove(item)
         save_data(data)
         st.rerun()
 
