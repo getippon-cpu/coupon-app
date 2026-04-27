@@ -47,13 +47,11 @@ def init_db():
     conn.close()
 
 def reset_db():
-    """完全リセット（テーブルごと削除→再生成）"""
     conn = sqlite3.connect(DB_FILE)
     c = conn.cursor()
     c.execute("DROP TABLE IF EXISTS coupons")
     conn.commit()
     conn.close()
-
     init_db()
 
 def load_data():
@@ -63,20 +61,17 @@ def load_data():
     rows = c.fetchall()
     conn.close()
 
-    data = []
-    for r in rows:
-        data.append({
-            "id": r[0],
-            "store": r[1],
-            "discount": r[2],
-            "category": r[3],
-            "quantity": r[4],
-            "used": r[5],
-            "expiry": r[6],
-            "note": r[7],
-            "image": r[8]
-        })
-    return data
+    return [{
+        "id": r[0],
+        "store": r[1],
+        "discount": r[2],
+        "category": r[3],
+        "quantity": r[4],
+        "used": r[5],
+        "expiry": r[6],
+        "note": r[7],
+        "image": r[8]
+    } for r in rows]
 
 def save_item(item):
     conn = sqlite3.connect(DB_FILE)
@@ -140,7 +135,7 @@ def safe_json(text):
     return {}
 
 # ===============================
-# AI解析
+# ★ AI解析（期限強化版）
 # ===============================
 def ai_extract(img):
     model_name = get_model()
@@ -150,13 +145,34 @@ def ai_extract(img):
     model = genai.GenerativeModel(model_name)
 
     prompt = """
-クーポン画像を解析してJSONで出力：
+あなたはクーポン画像解析AIです。
+
+次を抽出してください：
+
+【必須】
+- store（店舗名）
+- discount（割引内容）
+
+【重要：期限抽出ルール】
+expiryは画像から必ず推定してください。
+
+変換ルール：
+- 2026年3月末 → 2026-03-31
+- 3/31まで → YYYY-03-31（年があれば補完）
+- 2026/03/31 → 2026-03-31
+- 今月末 → 当月の最終日
+- 期限なし → 空文字
+
+【任意】
+- note（注意・備考・条件）
+
+必ずJSON形式：
 
 {
  "store": "",
  "discount": "",
- "expiry": "YYYY-MM-DD",
- "note": "備考（任意）"
+ "expiry": "YYYY-MM-DD or 空",
+ "note": ""
 }
 """
 
@@ -171,17 +187,16 @@ def ai_extract(img):
 # ===============================
 init_db()
 
-st.title("🎫 クーポン管理（DBリセット対応版）")
+st.title("🎫 クーポン管理（期限AI強化版）")
 
 # ===============================
-# サイドバー（重要）
+# サイドバー
 # ===============================
 st.sidebar.header("管理")
 
-# ★ DB完全リセットボタン追加
-if st.sidebar.button("🧨 DB完全リセット（全削除）"):
+if st.sidebar.button("🧨 DB完全リセット"):
     reset_db()
-    st.sidebar.success("DBを初期化しました")
+    st.sidebar.success("初期化完了")
     st.rerun()
 
 # ===============================
@@ -257,6 +272,7 @@ for item in data:
     qty = item["quantity"]
     remaining = qty - used
 
+    # 期限処理
     try:
         d = datetime.strptime(item["expiry"], "%Y-%m-%d").date()
         days = (d - today).days
