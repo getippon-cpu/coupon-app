@@ -28,6 +28,7 @@ DB_FILE = "coupons.db"
 def init_db():
     conn = sqlite3.connect(DB_FILE)
     c = conn.cursor()
+
     c.execute("""
         CREATE TABLE IF NOT EXISTS coupons (
             id TEXT PRIMARY KEY,
@@ -41,8 +42,19 @@ def init_db():
             image TEXT
         )
     """)
+
     conn.commit()
     conn.close()
+
+def reset_db():
+    """完全リセット（テーブルごと削除→再生成）"""
+    conn = sqlite3.connect(DB_FILE)
+    c = conn.cursor()
+    c.execute("DROP TABLE IF EXISTS coupons")
+    conn.commit()
+    conn.close()
+
+    init_db()
 
 def load_data():
     conn = sqlite3.connect(DB_FILE)
@@ -96,15 +108,8 @@ def delete_item(item_id):
     conn.commit()
     conn.close()
 
-def reset_db():
-    conn = sqlite3.connect(DB_FILE)
-    c = conn.cursor()
-    c.execute("DELETE FROM coupons")
-    conn.commit()
-    conn.close()
-
 # ===============================
-# 画像処理
+# 画像
 # ===============================
 def to_b64(img):
     buf = BytesIO()
@@ -145,13 +150,13 @@ def ai_extract(img):
     model = genai.GenerativeModel(model_name)
 
     prompt = """
-クーポン画像を解析してJSONで出力してください：
+クーポン画像を解析してJSONで出力：
 
 {
  "store": "",
  "discount": "",
  "expiry": "YYYY-MM-DD",
- "note": "備考（任意・なければ空）"
+ "note": "備考（任意）"
 }
 """
 
@@ -166,15 +171,17 @@ def ai_extract(img):
 # ===============================
 init_db()
 
-st.title("🎫 クーポン管理（安定版フル）")
+st.title("🎫 クーポン管理（DBリセット対応版）")
 
 # ===============================
-# 管理
+# サイドバー（重要）
 # ===============================
 st.sidebar.header("管理")
 
-if st.sidebar.button("⚠️ 全データ初期化"):
+# ★ DB完全リセットボタン追加
+if st.sidebar.button("🧨 DB完全リセット（全削除）"):
     reset_db()
+    st.sidebar.success("DBを初期化しました")
     st.rerun()
 
 # ===============================
@@ -190,7 +197,7 @@ category_filter = st.selectbox(
 # ===============================
 # アップロード
 # ===============================
-file = st.file_uploader("画像アップ", type=["jpg","png","jpeg"])
+file = st.file_uploader("画像アップ", type=["jpg", "png", "jpeg"])
 
 img = None
 ocr = st.session_state.get("ocr", {})
@@ -258,9 +265,7 @@ for item in data:
 
     col1, col2 = st.columns([1, 3])
 
-    # ===============================
-    # サムネイル＋回転（保存あり）
-    # ===============================
+    # サムネ＋回転
     with col1:
         if item.get("image"):
             st.image(from_b64(item["image"]), width=120)
@@ -279,9 +284,7 @@ for item in data:
                     save_item(item)
                     st.rerun()
 
-    # ===============================
     # 情報
-    # ===============================
     with col2:
         st.markdown(f"### {item['store']}")
         st.write(f"{item['discount']} / {item['category']}")
