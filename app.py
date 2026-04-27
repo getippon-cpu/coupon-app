@@ -14,6 +14,19 @@ import google.generativeai as genai
 genai.configure(api_key=st.secrets["GEMINI_API_KEY"])
 
 # ===============================
+# モデル自動取得（ここが重要）
+# ===============================
+def get_model():
+    try:
+        models = genai.list_models()
+        for m in models:
+            if "generateContent" in str(m.supported_generation_methods):
+                return m.name
+    except Exception:
+        pass
+    return None
+
+# ===============================
 # DB
 # ===============================
 DB_FILE = "coupons.db"
@@ -137,13 +150,12 @@ def safe_json(text):
     return {}
 
 # ===============================
-# AI解析（完全安定版）
+# AI解析（あなたの旧方式を採用）
 # ===============================
 def ai_extract(img):
 
     prompt = """
-あなたはクーポン解析AIです。
-画像から情報を抽出し、必ずJSONのみで返してください。
+クーポン画像を解析してJSONのみ返してください。
 
 {
   "store": "",
@@ -153,37 +165,28 @@ def ai_extract(img):
 }
 
 ルール:
+- 必ずJSONのみ
 - 説明文は禁止
 - 不明は空文字
-- 日付はYYYY-MM-DD
 """
 
-    # フォールバック（環境差吸収）
-    model_candidates = [
-        "models/gemini-1.0-pro-vision",
-        "models/gemini-pro-vision",
-        "gemini-pro-vision",
-        "models/gemini-1.0-pro"
-    ]
+    try:
+        model_name = get_model()
 
-    last_error = None
+        if not model_name:
+            st.error("利用可能なGeminiモデルが見つかりません")
+            return {}
 
-    for model_name in model_candidates:
-        try:
-            model = genai.GenerativeModel(model_name)
+        model = genai.GenerativeModel(model_name)
 
-            response = model.generate_content(
-                contents=[prompt, img]
-            )
+        response = model.generate_content([prompt, img])
 
-            if response and response.text:
-                return safe_json(response.text)
+        if response and response.text:
+            return safe_json(response.text)
 
-        except Exception as e:
-            last_error = e
-            continue
+    except Exception as e:
+        st.error(f"AI解析エラー: {e}")
 
-    st.error(f"AI解析に失敗: {last_error}")
     return {}
 
 # ===============================
@@ -191,10 +194,10 @@ def ai_extract(img):
 # ===============================
 init_db()
 
-st.title("🎫 クーポン管理（完全安定版）")
+st.title("🎫 クーポン管理（安定版・自動モデル取得）")
 
 # ===============================
-# サイドバー
+# 管理
 # ===============================
 st.sidebar.header("管理")
 
