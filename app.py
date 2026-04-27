@@ -135,7 +135,7 @@ def safe_json(text):
     return {}
 
 # ===============================
-# ★ AI解析（期限強化版）
+# ★ AI解析（期限特化・Vision専用）
 # ===============================
 def ai_extract(img):
     model_name = get_model()
@@ -145,39 +145,72 @@ def ai_extract(img):
     model = genai.GenerativeModel(model_name)
 
     prompt = """
-あなたはクーポン画像解析AIです。
+あなたは「クーポン画像専用の高精度視覚解析AI」です。
 
-次を抽出してください：
+絶対に以下ルールを守ってください：
 
-【必須】
+━━━━━━━━━━━━━━━━━━━━
+【最重要タスク】
+画像内のテキストを“すべて読む”こと
+
+見逃し禁止：
+- 小さい文字
+- 期限表記
+- 端の注意書き
+
+━━━━━━━━━━━━━━━━━━━━
+【抽出項目】
 - store（店舗名）
 - discount（割引内容）
+- expiry（有効期限）
+- note（注意事項）
 
-【重要：期限抽出ルール】
-expiryは画像から必ず推定してください。
+━━━━━━━━━━━━━━━━━━━━
+【期限抽出ルール（最重要）】
 
-変換ルール：
-- 2026年3月末 → 2026-03-31
-- 3/31まで → YYYY-03-31（年があれば補完）
-- 2026/03/31 → 2026-03-31
-- 今月末 → 当月の最終日
-- 期限なし → 空文字
+以下を必ず探す：
 
-【任意】
-- note（注意・備考・条件）
+■ パターン一覧
+- YYYY/MM/DD
+- YYYY-MM-DD
+- MM/DD
+- ○月○日
+- ○月末
+- 「〜まで」「有効期限」「期限」
 
-必ずJSON形式：
+■ 変換ルール
+- 3/31 → 年があれば補完して YYYY-03-31
+- 3月末 → その年の03-31
+- 今月末 → その月の最終日
+- 「〜まで」→ その日付
+- 明記なし → null
+
+━━━━━━━━━━━━━━━━━━━━
+【処理手順（必須）】
+1. 画像内のテキストを全列挙するつもりで読む
+2. 期限候補をすべて抽出
+3. 最も信頼できる1つを採用
+4. YYYY-MM-DDへ変換
+5. JSON出力
+
+━━━━━━━━━━━━━━━━━━━━
+【出力形式（厳守）】
 
 {
  "store": "",
  "discount": "",
- "expiry": "YYYY-MM-DD or 空",
+ "expiry": "YYYY-MM-DD or null",
  "note": ""
 }
 """
 
     try:
-        res = model.generate_content([prompt, img])
+        res = model.generate_content(
+            contents=[prompt, img],
+            generation_config={
+                "temperature": 0.0
+            }
+        )
         return safe_json(res.text)
     except:
         return {}
@@ -187,7 +220,7 @@ expiryは画像から必ず推定してください。
 # ===============================
 init_db()
 
-st.title("🎫 クーポン管理（期限AI強化版）")
+st.title("🎫 クーポン管理（Vision強化版・OCRなし）")
 
 # ===============================
 # サイドバー
@@ -210,9 +243,9 @@ category_filter = st.selectbox(
 )
 
 # ===============================
-# アップロード
+# 画像アップ
 # ===============================
-file = st.file_uploader("画像アップ", type=["jpg", "png", "jpeg"])
+file = st.file_uploader("画像アップ", type=["jpg","png","jpeg"])
 
 img = None
 ocr = st.session_state.get("ocr", {})
@@ -272,7 +305,6 @@ for item in data:
     qty = item["quantity"]
     remaining = qty - used
 
-    # 期限処理
     try:
         d = datetime.strptime(item["expiry"], "%Y-%m-%d").date()
         days = (d - today).days
@@ -281,7 +313,6 @@ for item in data:
 
     col1, col2 = st.columns([1, 3])
 
-    # サムネ＋回転
     with col1:
         if item.get("image"):
             st.image(from_b64(item["image"]), width=120)
@@ -300,11 +331,9 @@ for item in data:
                     save_item(item)
                     st.rerun()
 
-    # 情報
     with col2:
         st.markdown(f"### {item['store']}")
         st.write(f"{item['discount']} / {item['category']}")
-
         st.write(f"📅 期限: {item['expiry']}")
 
         if days < 0:
