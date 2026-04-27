@@ -1,0 +1,72 @@
+[
+  {
+    "name": "テスト",
+    "expiry": "2026-04-26",
+    "memo": "動作確認",
+    "store": "テスト",
+    "quantity": 1,
+    "discount": "",
+    "history": [],
+    "image": ""
+  },
+  {
+    "name": "テスト２",
+    "expiry": "2026-04-30",
+    "memo": "動作確認用",
+    "store": "テスト２",
+    "quantity": 1,
+    "discount": "",
+    "history": [],
+    "image": ""
+  },
+  {
+    "name": "テスト３",
+    "expiry": "2026-04-27",
+    "memo": "動作確認用",
+    "store": "テスト３",
+    "quantity": 1,
+    "discount": "",
+    "history": [],
+    "image": ""
+  },
+  {
+    "name": "テスト４",
+    "store": "おいしいごはん",
+    "category": "飲食",
+    "discount": "200円",
+    "quantity": 1,
+    "expiry": "2026-04-30",
+    "memo": "",
+    "history": [],
+    "image": ""
+  },
+  {
+    "name": "動作確認６",
+    "store": "",
+    "category": "飲食",
+    "discount": "",
+    "quantity": 1,
+    "expiry": "2026-04-26",
+    "memo": "",
+    "history": [],
+    "image": ""
+  },
+  {
+    "store": "VILLAGE VANGUARD",
+    "category": "飲食",
+    "discount": "1000円割引（2,000円(税込)毎に1枚利用可能）",
+    "quantity": 1,
+    "expiry": "2026-04-26",
+    "history": [],
+    "image": ""
+  },
+  {
+    "store": "VILLAGE VANGUARD",
+    "category": "飲食",
+    "discount": "1,000円割引（2,000円（税込）毎に1枚利用可能）",
+    "quantity": 1,
+    "expiry": "2026-04-26",
+    "image": "images\\VILLAGE_VANGUARD_1777142847.634099.jpg",
+    "history": []
+  }
+]
