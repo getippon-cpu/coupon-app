@@ -175,8 +175,12 @@ for i, item in enumerate(data):
     else:
         st.success(f"{store}（{exp_str}）")
 
-    if item.get("image"):
-        st.image(base64_to_image(item["image"]), width=200)
+if item.get("image"):
+    try:
+        img = base64_to_image(item["image"])
+        st.image(img, width=200)
+    except:
+        st.warning("画像表示エラー（古いデータ）")
 
     st.write(discount)
 
