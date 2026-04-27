@@ -38,6 +38,7 @@ def init_db():
             quantity INTEGER,
             used INTEGER,
             expiry TEXT,
+            note TEXT,
             image TEXT
         )
     """)
@@ -59,14 +60,15 @@ def load_data():
         "quantity": r[4],
         "used": r[5],
         "expiry": r[6],
-        "image": r[7]
+        "note": r[7],
+        "image": r[8]
     } for r in rows]
 
 def save_item(item):
     conn = sqlite3.connect(DB_FILE)
     c = conn.cursor()
     c.execute("""
-        INSERT OR REPLACE INTO coupons VALUES (?,?,?,?,?,?,?,?)
+        INSERT OR REPLACE INTO coupons VALUES (?,?,?,?,?,?,?,?,?)
     """, (
         item["id"],
         item["store"],
@@ -75,6 +77,7 @@ def save_item(item):
         item["quantity"],
         item["used"],
         item["expiry"],
+        item.get("note", ""),
         item["image"]
     ))
     conn.commit()
@@ -94,7 +97,7 @@ def reset_db():
     conn.close()
 
 # ===============================
-# 画像処理
+# 画像
 # ===============================
 def to_b64(img):
     buf = BytesIO()
@@ -104,13 +107,8 @@ def to_b64(img):
 def from_b64(b):
     return Image.open(BytesIO(base64.b64decode(b)))
 
-def rotate_b64_image(b64, angle):
-    img = from_b64(b64)
-    img = img.rotate(angle, expand=True)
-    return to_b64(img)
-
 # ===============================
-# JSON安全処理
+# JSON安全
 # ===============================
 def safe_json(text):
     try:
@@ -125,7 +123,7 @@ def safe_json(text):
     return {}
 
 # ===============================
-# AI解析
+# AI解析（備考追加）
 # ===============================
 def ai_extract(img):
     model_name = get_model()
@@ -135,13 +133,18 @@ def ai_extract(img):
     model = genai.GenerativeModel(model_name)
 
     prompt = """
-クーポン画像を解析しJSONで出力：
+クーポン画像を解析してJSONで出力してください。
+
+以下の形式：
 
 {
- "store":"",
- "discount":"",
- "expiry":"YYYY-MM-DD"
+ "store": "",
+ "discount": "",
+ "expiry": "YYYY-MM-DD",
+ "note": "補足情報・注意点・備考（なければ空でOK）"
 }
+
+※備考は自由記述でOK（任意）
 """
 
     try:
@@ -155,7 +158,7 @@ def ai_extract(img):
 # ===============================
 init_db()
 
-st.title("🎫 クーポン管理（完成版）")
+st.title("🎫 クーポン管理（備考付きAI版）")
 
 # ===============================
 # 管理
@@ -179,7 +182,7 @@ category_filter = st.selectbox(
 # ===============================
 # アップロード
 # ===============================
-file = st.file_uploader("画像アップ", type=["jpg", "png", "jpeg"])
+file = st.file_uploader("画像アップ", type=["jpg","png","jpeg"])
 
 img = None
 ocr = st.session_state.get("ocr", {})
@@ -190,7 +193,7 @@ if file:
     st.image(img)
 
     # ===============================
-    # AI解析（重要）
+    # AI解析
     # ===============================
     if st.button("🤖 AI解析", key="ai_extract"):
         st.session_state["ocr"] = ai_extract(img)
@@ -206,6 +209,9 @@ category = st.selectbox("カテゴリ", ["飲食","物販","サービス","そ�
 quantity = st.number_input("枚数", 1, 100, 1)
 expiry = st.date_input("期限")
 
+# ★ 備考（任意入力）
+note = st.text_area("備考（任意）", ocr.get("note",""))
+
 # ===============================
 # 保存
 # ===============================
@@ -218,6 +224,7 @@ if st.button("保存"):
         "quantity": quantity,
         "used": 0,
         "expiry": str(expiry),
+        "note": note,
         "image": to_b64(img) if img else None
     })
     st.rerun()
@@ -232,7 +239,6 @@ today = datetime.today().date()
 
 for item in data:
 
-    # フィルタ
     if search and search not in item["store"]:
         continue
     if category_filter != "すべて" and item["category"] != category_filter:
@@ -248,36 +254,12 @@ for item in data:
     except:
         days = 999
 
-    # ===============================
-    # カードUI
-    # ===============================
     col1, col2 = st.columns([1, 3])
 
-    # -------------------------------
-    # サムネイル＋回転（ここが今回の本体）
-    # -------------------------------
     with col1:
         if item.get("image"):
-
             st.image(from_b64(item["image"]), width=120)
 
-            r1, r2 = st.columns(2)
-
-            with r1:
-                if st.button("↺", key=f"rot_l_{item['id']}"):
-                    item["image"] = rotate_b64_image(item["image"], 90)
-                    save_item(item)
-                    st.rerun()
-
-            with r2:
-                if st.button("↻", key=f"rot_r_{item['id']}"):
-                    item["image"] = rotate_b64_image(item["image"], -90)
-                    save_item(item)
-                    st.rerun()
-
-    # -------------------------------
-    # 情報表示
-    # -------------------------------
     with col2:
         st.markdown(f"### {item['store']}")
         st.write(f"{item['discount']} / {item['category']}")
@@ -290,6 +272,10 @@ for item in data:
             st.write(f"残り日数: {days}日")
 
         st.write(f"使用: {used} / {qty}（残り {remaining}）")
+
+        # ★ 備考表示（追加ポイント）
+        if item.get("note"):
+            st.info(f"📝 備考: {item['note']}")
 
         if qty > 0:
             st.progress(used / qty)
