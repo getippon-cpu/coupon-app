@@ -87,8 +87,15 @@ def delete_item(item_id):
     conn.commit()
     conn.close()
 
+def reset_db():
+    conn = sqlite3.connect(DB_FILE)
+    c = conn.cursor()
+    c.execute("DELETE FROM coupons")
+    conn.commit()
+    conn.close()
+
 # ===============================
-# 画像処理（回転機能追加）
+# 画像処理
 # ===============================
 def to_b64(img):
     buf = BytesIO()
@@ -97,9 +104,6 @@ def to_b64(img):
 
 def from_b64(b):
     return Image.open(BytesIO(base64.b64decode(b)))
-
-def rotate_image(img, angle):
-    return img.rotate(angle, expand=True)
 
 # ===============================
 # JSON安全
@@ -117,11 +121,56 @@ def safe_json(text):
     return {}
 
 # ===============================
+# AI OCR
+# ===============================
+def ai_extract(img):
+    model_name = get_model()
+    if not model_name:
+        return {}
+
+    model = genai.GenerativeModel(model_name)
+
+    prompt = """
+クーポン画像を解析してJSON出力：
+
+{
+ "store":"",
+ "discount":"",
+ "expiry":"YYYY-MM-DD"
+}
+"""
+
+    try:
+        res = model.generate_content([prompt, img])
+        return safe_json(res.text)
+    except:
+        return {}
+
+# ===============================
 # 初期化
 # ===============================
 init_db()
 
-st.title("🎫 クーポン管理（回転・期限強化版）")
+st.title("🎫 クーポン管理（完成版）")
+
+# ===============================
+# 管理
+# ===============================
+st.sidebar.header("管理")
+
+if st.sidebar.button("⚠️ 全データ初期化"):
+    reset_db()
+    st.rerun()
+
+# ===============================
+# フィルタ
+# ===============================
+search = st.text_input("🔍 店名検索")
+
+category_filter = st.selectbox(
+    "カテゴリ",
+    ["すべて", "飲食", "物販", "サービス", "その他"]
+)
 
 # ===============================
 # アップロード
@@ -129,30 +178,42 @@ st.title("🎫 クーポン管理（回転・期限強化版）")
 file = st.file_uploader("画像アップ", type=["jpg","png","jpeg"])
 
 img = None
+ocr = st.session_state.get("ocr", {})
 
 if file:
     img = Image.open(file)
 
-    # ===========================
-    # 🔄 手動回転UI（追加）
-    # ===========================
+    # 表示
+    st.image(img)
+
+    # ===============================
+    # 回転
+    # ===============================
     col1, col2 = st.columns(2)
 
     with col1:
         if st.button("⬅ 左回転"):
-            img = rotate_image(img, 90)
+            img = img.rotate(90, expand=True)
+            st.image(img)
 
     with col2:
         if st.button("➡ 右回転"):
-            img = rotate_image(img, -90)
+            img = img.rotate(-90, expand=True)
+            st.image(img)
 
-    st.image(img)
+    # ===============================
+    # ★ AI解析ボタン（復活）
+    # ===============================
+    if st.button("🤖 AI解析", key="ai_extract"):
+        st.session_state["ocr"] = ai_extract(img)
+
+    ocr = st.session_state.get("ocr", {})
 
 # ===============================
 # 入力
 # ===============================
-store = st.text_input("店舗名")
-discount = st.text_input("割引")
+store = st.text_input("店舗名", ocr.get("store",""))
+discount = st.text_input("割引", ocr.get("discount",""))
 category = st.selectbox("カテゴリ", ["飲食","物販","サービス","その他"])
 quantity = st.number_input("枚数", 1, 100, 1)
 expiry = st.date_input("期限")
@@ -183,17 +244,25 @@ today = datetime.today().date()
 
 for item in data:
 
+    # フィルタ
+    if search and search not in item["store"]:
+        continue
+    if category_filter != "すべて" and item["category"] != category_filter:
+        continue
+
     used = item["used"]
     qty = item["quantity"]
     remaining = qty - used
 
-    # 期限処理
     try:
         d = datetime.strptime(item["expiry"], "%Y-%m-%d").date()
         days = (d - today).days
     except:
         days = 999
 
+    # ===============================
+    # カードUI
+    # ===============================
     col1, col2 = st.columns([1, 3])
 
     with col1:
@@ -204,9 +273,7 @@ for item in data:
         st.markdown(f"### {item['store']}")
         st.write(f"{item['discount']} / {item['category']}")
 
-        # ===========================
-        # ② 期限＋残日数（強化）
-        # ===========================
+        # 期限表示
         st.write(f"📅 期限: {item['expiry']}")
 
         if days < 0:
@@ -214,11 +281,13 @@ for item in data:
         else:
             st.write(f"残り日数: {days}日")
 
-        st.write(f"使用状況: {used} / {qty}（残り {remaining}）")
+        # 使用状況
+        st.write(f"使用: {used} / {qty}（残り {remaining}）")
 
         if qty > 0:
             st.progress(used / qty)
 
+        # 操作
         c1, c2, c3 = st.columns(3)
 
         with c1:
