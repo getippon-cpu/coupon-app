@@ -14,7 +14,7 @@ import google.generativeai as genai
 genai.configure(api_key=st.secrets["GEMINI_API_KEY"])
 
 # ===============================
-# モデル自動取得（ここが重要）
+# モデル取得
 # ===============================
 def get_model():
     try:
@@ -113,7 +113,7 @@ def delete_item(item_id):
     conn.close()
 
 # ===============================
-# 画像処理
+# 画像
 # ===============================
 def to_b64(img):
     if img is None:
@@ -135,7 +135,7 @@ def rotate_b64(b64, angle):
     return to_b64(img)
 
 # ===============================
-# JSON安全化
+# JSON
 # ===============================
 def safe_json(text):
     try:
@@ -150,9 +150,16 @@ def safe_json(text):
     return {}
 
 # ===============================
-# AI解析（あなたの旧方式を採用）
+# AI（連打防止付き）
 # ===============================
 def ai_extract(img):
+
+    # 🔴 連打防止キー（重要）
+    if st.session_state.get("ai_running", False):
+        st.warning("AI処理中です。少し待ってください")
+        return {}
+
+    st.session_state["ai_running"] = True
 
     prompt = """
 クーポン画像を解析してJSONのみ返してください。
@@ -166,7 +173,7 @@ def ai_extract(img):
 
 ルール:
 - 必ずJSONのみ
-- 説明文は禁止
+- 説明文禁止
 - 不明は空文字
 """
 
@@ -174,30 +181,32 @@ def ai_extract(img):
         model_name = get_model()
 
         if not model_name:
-            st.error("利用可能なGeminiモデルが見つかりません")
+            st.error("利用可能なモデルが見つかりません")
             return {}
 
         model = genai.GenerativeModel(model_name)
 
         response = model.generate_content([prompt, img])
 
-        if response and response.text:
-            return safe_json(response.text)
+        return safe_json(response.text)
 
     except Exception as e:
         st.error(f"AI解析エラー: {e}")
+        return {}
 
-    return {}
+    finally:
+        # 🔵 必ずロック解除
+        st.session_state["ai_running"] = False
 
 # ===============================
 # 初期化
 # ===============================
 init_db()
 
-st.title("🎫 クーポン管理（安定版・自動モデル取得）")
+st.title("🎫 クーポン管理（連打防止版）")
 
 # ===============================
-# 管理
+# サイドバー
 # ===============================
 st.sidebar.header("管理")
 
@@ -227,7 +236,8 @@ if file:
     img = Image.open(file)
     st.image(img)
 
-    if st.button("🤖 AI解析"):
+    # 🔴 ここが連打防止の本体
+    if st.button("🤖 AI解析", disabled=st.session_state.get("ai_running", False)):
         st.session_state["ocr"] = ai_extract(img)
 
 ocr = st.session_state.get("ocr", {})
@@ -289,20 +299,6 @@ for item in data:
     with col1:
         if item.get("image"):
             st.image(from_b64(item["image"]), width=120)
-
-            c1, c2 = st.columns(2)
-
-            with c1:
-                if st.button("↺", key=f"l_{item['id']}"):
-                    item["image"] = rotate_b64(item["image"], 90)
-                    save_item(item)
-                    st.rerun()
-
-            with c2:
-                if st.button("↻", key=f"r_{item['id']}"):
-                    item["image"] = rotate_b64(item["image"], -90)
-                    save_item(item)
-                    st.rerun()
 
     with col2:
         st.markdown(f"### {item['store']}")
