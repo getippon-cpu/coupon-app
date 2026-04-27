@@ -87,6 +87,12 @@ def delete_item(item_id):
     conn.commit()
     conn.close()
 
+def reset_db():
+    conn = sqlite3.connect(DB_FILE)
+    conn.execute("DELETE FROM coupons")
+    conn.commit()
+    conn.close()
+
 # ===============================
 # 画像処理
 # ===============================
@@ -99,13 +105,12 @@ def from_b64(b):
     return Image.open(BytesIO(base64.b64decode(b)))
 
 def rotate_b64_image(b64, angle):
-    """DB上の画像を回転して返す"""
     img = from_b64(b64)
     img = img.rotate(angle, expand=True)
     return to_b64(img)
 
 # ===============================
-# JSON安全
+# JSON安全処理
 # ===============================
 def safe_json(text):
     try:
@@ -120,11 +125,37 @@ def safe_json(text):
     return {}
 
 # ===============================
+# AI解析
+# ===============================
+def ai_extract(img):
+    model_name = get_model()
+    if not model_name:
+        return {}
+
+    model = genai.GenerativeModel(model_name)
+
+    prompt = """
+クーポン画像を解析しJSONで出力：
+
+{
+ "store":"",
+ "discount":"",
+ "expiry":"YYYY-MM-DD"
+}
+"""
+
+    try:
+        res = model.generate_content([prompt, img])
+        return safe_json(res.text)
+    except:
+        return {}
+
+# ===============================
 # 初期化
 # ===============================
 init_db()
 
-st.title("🎫 クーポン管理（サムネイル回転対応）")
+st.title("🎫 クーポン管理（完成版）")
 
 # ===============================
 # 管理
@@ -132,10 +163,7 @@ st.title("🎫 クーポン管理（サムネイル回転対応）")
 st.sidebar.header("管理")
 
 if st.sidebar.button("⚠️ 全データ初期化"):
-    conn = sqlite3.connect(DB_FILE)
-    conn.execute("DELETE FROM coupons")
-    conn.commit()
-    conn.close()
+    reset_db()
     st.rerun()
 
 # ===============================
@@ -149,16 +177,62 @@ category_filter = st.selectbox(
 )
 
 # ===============================
-# データ取得
+# アップロード
 # ===============================
-data = load_data()
-today = datetime.today().date()
+file = st.file_uploader("画像アップ", type=["jpg", "png", "jpeg"])
+
+img = None
+ocr = st.session_state.get("ocr", {})
+
+if file:
+    img = Image.open(file)
+
+    st.image(img)
+
+    # ===============================
+    # AI解析（重要）
+    # ===============================
+    if st.button("🤖 AI解析", key="ai_extract"):
+        st.session_state["ocr"] = ai_extract(img)
+
+    ocr = st.session_state.get("ocr", {})
+
+# ===============================
+# 入力
+# ===============================
+store = st.text_input("店舗名", ocr.get("store",""))
+discount = st.text_input("割引", ocr.get("discount",""))
+category = st.selectbox("カテゴリ", ["飲食","物販","サービス","その他"])
+quantity = st.number_input("枚数", 1, 100, 1)
+expiry = st.date_input("期限")
+
+# ===============================
+# 保存
+# ===============================
+if st.button("保存"):
+    save_item({
+        "id": str(datetime.now().timestamp()),
+        "store": store,
+        "discount": discount,
+        "category": category,
+        "quantity": quantity,
+        "used": 0,
+        "expiry": str(expiry),
+        "image": to_b64(img) if img else None
+    })
+    st.rerun()
 
 # ===============================
 # 一覧
 # ===============================
+st.subheader("一覧")
+
+data = load_data()
+today = datetime.today().date()
+
 for item in data:
 
+    # フィルタ
     if search and search not in item["store"]:
         continue
     if category_filter != "すべて" and item["category"] != category_filter:
@@ -174,33 +248,36 @@ for item in data:
     except:
         days = 999
 
+    # ===============================
+    # カードUI
+    # ===============================
     col1, col2 = st.columns([1, 3])
 
-    # ===============================
-    # サムネイル＋回転（新機能）
-    # ===============================
+    # -------------------------------
+    # サムネイル＋回転（ここが今回の本体）
+    # -------------------------------
     with col1:
         if item.get("image"):
 
             st.image(from_b64(item["image"]), width=120)
 
-            c1, c2 = st.columns(2)
+            r1, r2 = st.columns(2)
 
-            with c1:
+            with r1:
                 if st.button("↺", key=f"rot_l_{item['id']}"):
                     item["image"] = rotate_b64_image(item["image"], 90)
                     save_item(item)
                     st.rerun()
 
-            with c2:
+            with r2:
                 if st.button("↻", key=f"rot_r_{item['id']}"):
                     item["image"] = rotate_b64_image(item["image"], -90)
                     save_item(item)
                     st.rerun()
 
-    # ===============================
+    # -------------------------------
     # 情報表示
-    # ===============================
+    # -------------------------------
     with col2:
         st.markdown(f"### {item['store']}")
         st.write(f"{item['discount']} / {item['category']}")
