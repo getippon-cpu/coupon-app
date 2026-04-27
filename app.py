@@ -25,6 +25,22 @@ except Exception as e:
     st.error(f"APIエラー: {e}")
 
 # ===============================
+# モデル自動取得（最重要）
+# ===============================
+def get_model():
+    try:
+        models = genai.list_models()
+
+        for m in models:
+            if "generateContent" in str(m.supported_generation_methods):
+                return m.name
+
+    except Exception as e:
+        st.error(f"モデル取得失敗: {e}")
+
+    return None
+
+# ===============================
 # データ
 # ===============================
 DATA_FILE = "coupons.json"
@@ -43,7 +59,7 @@ def save_data(data):
         json.dump(data, f, ensure_ascii=False, indent=2)
 
 # ===============================
-# 画像 → Base64
+# 画像変換
 # ===============================
 def image_to_base64(img):
     buffer = BytesIO()
@@ -54,7 +70,7 @@ def base64_to_image(b64):
     return Image.open(BytesIO(base64.b64decode(b64)))
 
 # ===============================
-# AI解析（安定版）
+# AI解析（最新版）
 # ===============================
 def ai_from_image(image):
 
@@ -62,9 +78,17 @@ def ai_from_image(image):
         st.error("AI使用不可")
         return None
 
+    model_name = get_model()
+
+    if not model_name:
+        st.error("モデル取得失敗")
+        return None
+
+    st.info(f"使用モデル: {model_name}")
+
     prompt = """
 この画像はクーポンです。
-以下の情報をJSON形式で出力してください。
+以下をJSONで出力してください。
 
 {
  "store": "",
@@ -76,7 +100,7 @@ JSONのみ出力。
 """
 
     try:
-        model = genai.GenerativeModel("gemini-1.5-flash")
+        model = genai.GenerativeModel(model_name)
 
         response = model.generate_content([prompt, image])
 
@@ -86,9 +110,7 @@ JSONのみ出力。
 
         cleaned = re.sub(r"```json|```", "", raw).strip()
 
-        data = json.loads(cleaned)
-
-        return data
+        return json.loads(cleaned)
 
     except Exception as e:
         st.error(f"AI解析失敗: {e}")
@@ -175,12 +197,12 @@ for i, item in enumerate(data):
     else:
         st.success(f"{store}（{exp_str}）")
 
-if item.get("image"):
-    try:
-        img = base64_to_image(item["image"])
-        st.image(img, width=200)
-    except:
-        st.warning("画像表示エラー（古いデータ）")
+    if item.get("image"):
+        try:
+            img = base64_to_image(item["image"])
+            st.image(img, width=200)
+        except:
+            st.warning("画像表示エラー")
 
     st.write(discount)
 
