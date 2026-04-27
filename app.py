@@ -6,23 +6,14 @@ import sqlite3
 from datetime import datetime
 from PIL import Image
 from io import BytesIO
-import google.generativeai as genai
+from google import genai
 
 # ===============================
-# API設定（安定化）
+# Gemini（新SDK）
 # ===============================
-API_KEY = st.secrets.get("GEMINI_API_KEY")
+client = genai.Client(api_key=st.secrets["GEMINI_API_KEY"])
 
-if not API_KEY:
-    st.error("GEMINI_API_KEYが設定されていません")
-    st.stop()
-
-genai.configure(api_key=API_KEY)
-
-MODEL_NAME = "models/gemini-pro-vision"
-
-def get_model():
-    return MODEL_NAME
+MODEL_NAME = "gemini-1.5-flash"
 
 # ===============================
 # DB
@@ -56,7 +47,6 @@ def reset_db():
     c.execute("DROP TABLE IF EXISTS coupons")
     conn.commit()
     conn.close()
-
     init_db()
 
 def load_data():
@@ -66,9 +56,8 @@ def load_data():
     rows = c.fetchall()
     conn.close()
 
-    data = []
-    for r in rows:
-        data.append({
+    return [
+        {
             "id": r[0],
             "store": r[1],
             "discount": r[2],
@@ -78,8 +67,9 @@ def load_data():
             "expiry": r[6],
             "note": r[7],
             "image": r[8]
-        })
-    return data
+        }
+        for r in rows
+    ]
 
 def save_item(item):
     conn = sqlite3.connect(DB_FILE)
@@ -149,13 +139,11 @@ def safe_json(text):
     return {}
 
 # ===============================
-# AI解析（安定版）
+# AI解析（新SDK）
 # ===============================
 def ai_extract(img):
-    model = genai.GenerativeModel(MODEL_NAME)
-
     prompt = """
-必ずJSONのみを返してください。説明は禁止。
+クーポン画像を解析してJSONのみ返してください。
 
 {
  "store": "",
@@ -166,8 +154,12 @@ def ai_extract(img):
 """
 
     try:
-        res = model.generate_content([prompt, img])
-        return safe_json(res.text.strip())
+        response = client.models.generate_content(
+            model=MODEL_NAME,
+            contents=[prompt, img]
+        )
+        return safe_json(response.text)
+
     except Exception as e:
         st.error(f"AI解析エラー: {e}")
         return {}
@@ -177,17 +169,16 @@ def ai_extract(img):
 # ===============================
 init_db()
 
-st.title("🎫 クーポン管理（安定版）")
+st.title("🎫 クーポン管理（完全安定版）")
 
 # ===============================
 # サイドバー
 # ===============================
 st.sidebar.header("管理")
 
-if st.sidebar.button("🧨 DB完全リセット（全削除）"):
+if st.sidebar.button("🧨 DB完全リセット"):
     reset_db()
     st.session_state.clear()
-    st.sidebar.success("DBを初期化しました")
     st.rerun()
 
 # ===============================
@@ -224,7 +215,7 @@ discount = st.text_input("割引", ocr.get("discount", ""))
 category = st.selectbox("カテゴリ", ["飲食", "物販", "サービス", "その他"])
 quantity = st.number_input("枚数", 1, 100, 1)
 expiry = st.date_input("期限")
-note = st.text_area("備考（任意）", ocr.get("note", ""))
+note = st.text_area("備考", ocr.get("note", ""))
 
 # ===============================
 # 保存
@@ -239,7 +230,7 @@ if st.button("保存"):
         "used": 0,
         "expiry": str(expiry),
         "note": note,
-        "image": to_b64(img) if img else ""
+        "image": to_b64(img)
     })
     st.rerun()
 
@@ -263,17 +254,13 @@ for item in data:
     remaining = qty - used
 
     try:
-        if item["expiry"]:
-            d = datetime.strptime(item["expiry"], "%Y-%m-%d").date()
-            days = (d - today).days
-        else:
-            days = 999
+        d = datetime.strptime(item["expiry"], "%Y-%m-%d").date()
+        days = (d - today).days
     except:
         days = 999
 
     col1, col2 = st.columns([1, 3])
 
-    # 画像
     with col1:
         if item.get("image"):
             st.image(from_b64(item["image"]), width=120)
@@ -292,7 +279,6 @@ for item in data:
                     save_item(item)
                     st.rerun()
 
-    # 情報
     with col2:
         st.markdown(f"### {item['store']}")
         st.write(f"{item['discount']} / {item['category']}")
