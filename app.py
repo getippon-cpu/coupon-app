@@ -104,7 +104,7 @@ def delete_item(item_id):
     conn.close()
 
 # ===============================
-# 画像処理
+# 画像
 # ===============================
 def to_b64(img):
     buf = BytesIO()
@@ -120,7 +120,7 @@ def rotate_b64(b64, angle):
     return to_b64(img)
 
 # ===============================
-# JSON安全
+# JSON
 # ===============================
 def safe_json(text):
     try:
@@ -135,7 +135,7 @@ def safe_json(text):
     return {}
 
 # ===============================
-# ★ AI解析（構造強制版）
+# ★ AI解析（最重要：シンプル指示版）
 # ===============================
 def ai_extract(img):
     model_name = get_model()
@@ -145,42 +145,22 @@ def ai_extract(img):
     model = genai.GenerativeModel(model_name)
 
     prompt = """
-あなたはクーポン画像解析AIです。
+この画像はクーポン券です。
+ここから以下を読み取ってください：
 
-絶対に以下の手順で処理してください。
+- 店舗名
+- 割引内容
+- カテゴリ（飲食・物販・サービス・その他）
+- 有効期限
+- 備考
 
-━━━━━━━━━━━━━━━━━━━━
-【STEP 1：全文スキャン】
-画像内の文字をすべて読む（小さい文字含む）
-
-━━━━━━━━━━━━━━━━━━━━
-【STEP 2：期限候補を全列挙】
-以下すべて抽出：
-- 日付（YYYY/MM/DD, MM/DD, ○月○日）
-- 期限表記（〜まで / 有効期限 / expiry）
-- 月末表記（○月末 / 今月末）
-
-※見逃し禁止
-
-━━━━━━━━━━━━━━━━━━━━
-【STEP 3：候補から選択】
-優先順位：
-1. 明確な日付
-2. 完全日付表記
-3. 月末表記
-4. 推定
-
-━━━━━━━━━━━━━━━━━━━━
-【STEP 4：YYYY-MM-DD変換】
-必ず統一
-
-━━━━━━━━━━━━━━━━━━━━
-【STEP 5：JSON出力】
+必ずJSON形式で出力してください：
 
 {
  "store": "",
  "discount": "",
- "expiry": "YYYY-MM-DD or null",
+ "category": "",
+ "expiry": "",
  "note": ""
 }
 """
@@ -189,8 +169,7 @@ def ai_extract(img):
         res = model.generate_content(
             contents=[prompt, img],
             generation_config={
-                "temperature": 0.0,
-                "top_p": 1.0
+                "temperature": 0.0
             }
         )
         return safe_json(res.text)
@@ -202,7 +181,7 @@ def ai_extract(img):
 # ===============================
 init_db()
 
-st.title("🎫 クーポン管理（最終安定版）")
+st.title("🎫 クーポン管理（最適プロンプト版）")
 
 # ===============================
 # サイドバー
@@ -225,7 +204,7 @@ category_filter = st.selectbox(
 )
 
 # ===============================
-# 画像
+# アップロード
 # ===============================
 file = st.file_uploader("画像アップ", type=["jpg","png","jpeg"])
 
