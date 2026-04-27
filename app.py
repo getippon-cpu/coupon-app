@@ -4,7 +4,7 @@ import re
 import base64
 import sqlite3
 from datetime import datetime
-from PIL import Image, ImageOps
+from PIL import Image
 from io import BytesIO
 import google.generativeai as genai
 
@@ -87,23 +87,9 @@ def delete_item(item_id):
     conn.commit()
     conn.close()
 
-def reset_db():
-    conn = sqlite3.connect(DB_FILE)
-    c = conn.cursor()
-    c.execute("DELETE FROM coupons")
-    conn.commit()
-    conn.close()
-
 # ===============================
-# 画像処理（②改善ポイント）
+# 画像処理（回転機能追加）
 # ===============================
-def fix_orientation(img):
-    """EXIF情報を使って自動回転補正"""
-    try:
-        return ImageOps.exif_transpose(img)
-    except:
-        return img
-
 def to_b64(img):
     buf = BytesIO()
     img.save(buf, format="JPEG")
@@ -111,6 +97,9 @@ def to_b64(img):
 
 def from_b64(b):
     return Image.open(BytesIO(base64.b64decode(b)))
+
+def rotate_image(img, angle):
+    return img.rotate(angle, expand=True)
 
 # ===============================
 # JSON安全
@@ -128,56 +117,11 @@ def safe_json(text):
     return {}
 
 # ===============================
-# AI
-# ===============================
-def ai_extract(img):
-    model_name = get_model()
-    if not model_name:
-        return {}
-
-    model = genai.GenerativeModel(model_name)
-
-    prompt = """
-クーポン画像からJSON抽出：
-
-{
- "store":"",
- "discount":"",
- "expiry":"YYYY-MM-DD"
-}
-"""
-
-    try:
-        res = model.generate_content([prompt, img])
-        return safe_json(res.text)
-    except:
-        return {}
-
-# ===============================
 # 初期化
 # ===============================
 init_db()
 
-st.title("🎫 クーポン管理（使用管理強化版）")
-
-# ===============================
-# 管理
-# ===============================
-st.sidebar.header("管理")
-
-if st.sidebar.button("⚠️ 全データ初期化"):
-    reset_db()
-    st.rerun()
-
-# ===============================
-# フィルタ
-# ===============================
-search = st.text_input("🔍 店名検索")
-
-category_filter = st.selectbox(
-    "カテゴリ",
-    ["すべて", "飲食", "物販", "サービス", "その他"]
-)
+st.title("🎫 クーポン管理（回転・期限強化版）")
 
 # ===============================
 # アップロード
@@ -188,19 +132,27 @@ img = None
 
 if file:
     img = Image.open(file)
-    img = fix_orientation(img)  # ★ここが重要（回転補正）
+
+    # ===========================
+    # 🔄 手動回転UI（追加）
+    # ===========================
+    col1, col2 = st.columns(2)
+
+    with col1:
+        if st.button("⬅ 左回転"):
+            img = rotate_image(img, 90)
+
+    with col2:
+        if st.button("➡ 右回転"):
+            img = rotate_image(img, -90)
+
     st.image(img)
-
-    if st.button("AI解析"):
-        st.session_state["ocr"] = ai_extract(img)
-
-ocr = st.session_state.get("ocr", {})
 
 # ===============================
 # 入力
 # ===============================
-store = st.text_input("店舗名", ocr.get("store",""))
-discount = st.text_input("割引", ocr.get("discount",""))
+store = st.text_input("店舗名")
+discount = st.text_input("割引")
 category = st.selectbox("カテゴリ", ["飲食","物販","サービス","その他"])
 quantity = st.number_input("枚数", 1, 100, 1)
 expiry = st.date_input("期限")
@@ -231,26 +183,17 @@ today = datetime.today().date()
 
 for item in data:
 
-    # フィルタ
-    if search and search not in item["store"]:
-        continue
-    if category_filter != "すべて" and item["category"] != category_filter:
-        continue
-
     used = item["used"]
     qty = item["quantity"]
     remaining = qty - used
 
-    # 期限
+    # 期限処理
     try:
         d = datetime.strptime(item["expiry"], "%Y-%m-%d").date()
         days = (d - today).days
     except:
         days = 999
 
-    # ===============================
-    # カード表示
-    # ===============================
     col1, col2 = st.columns([1, 3])
 
     with col1:
@@ -261,20 +204,20 @@ for item in data:
         st.markdown(f"### {item['store']}")
         st.write(f"{item['discount']} / {item['category']}")
 
-        # ★ 使用済み可視化（ここが改善ポイント①）
-        st.write(f"使用状況: {used} / {qty} （残り {remaining}）")
+        # ===========================
+        # ② 期限＋残日数（強化）
+        # ===========================
+        st.write(f"📅 期限: {item['expiry']}")
 
-        # シンプルなバー表現
-        if qty > 0:
-            st.progress(used / qty)
-
-        # 期限表示
         if days < 0:
             st.error("期限切れ")
-        elif days < 7:
-            st.warning(f"あと{days}日")
         else:
-            st.success("有効")
+            st.write(f"残り日数: {days}日")
+
+        st.write(f"使用状況: {used} / {qty}（残り {remaining}）")
+
+        if qty > 0:
+            st.progress(used / qty)
 
         c1, c2, c3 = st.columns(3)
 
