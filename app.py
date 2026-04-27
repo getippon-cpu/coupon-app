@@ -114,24 +114,8 @@ def to_b64(img):
 def from_b64(b):
     return Image.open(BytesIO(base64.b64decode(b)))
 
-def rotate_b64(b64, angle):
-    img = from_b64(b64)
-    img = img.rotate(angle, expand=True)
-    return to_b64(img)
-
 # ===============================
-# ★ 重要：日付パース修正
-# ===============================
-def parse_ai_date(date_str):
-    if not date_str:
-        return datetime.today().date()
-    try:
-        return datetime.strptime(date_str, "%Y-%m-%d").date()
-    except:
-        return datetime.today().date()
-
-# ===============================
-# JSON
+# AI JSON安全
 # ===============================
 def safe_json(text):
     try:
@@ -146,7 +130,7 @@ def safe_json(text):
     return {}
 
 # ===============================
-# AI
+# ★ AI解析（シンプル最強プロンプト）
 # ===============================
 def ai_extract(img):
     model_name = get_model()
@@ -177,17 +161,39 @@ def ai_extract(img):
 """
 
     try:
-        res = model.generate_content([prompt, img], generation_config={"temperature": 0.0})
+        res = model.generate_content(
+            contents=[prompt, img],
+            generation_config={"temperature": 0.0}
+        )
         return safe_json(res.text)
     except:
         return {}
+
+# ===============================
+# ★ AI結果を必ず永続化する関数（重要）
+# ===============================
+def run_ai(img):
+    result = ai_extract(img)
+    st.session_state["ocr"] = result
+    return result
+
+# ===============================
+# 日付パース（安全）
+# ===============================
+def parse_ai_date(date_str):
+    if not date_str or date_str == "null":
+        return datetime.today().date()
+    try:
+        return datetime.strptime(date_str, "%Y-%m-%d").date()
+    except:
+        return datetime.today().date()
 
 # ===============================
 # 初期化
 # ===============================
 init_db()
 
-st.title("🎫 クーポン管理（期限反映修正済）")
+st.title("🎫 クーポン管理（安定版・AI修正版）")
 
 # ===============================
 # サイドバー
@@ -210,31 +216,41 @@ category_filter = st.selectbox(
 )
 
 # ===============================
-# 画像
+# アップロード
 # ===============================
 file = st.file_uploader("画像アップ", type=["jpg","png","jpeg"])
 
 img = None
-ocr = st.session_state.get("ocr", {})
 
 if file:
     img = Image.open(file)
     st.image(img)
 
+    # ★ 修正ポイント（state永続化）
     if st.button("🤖 AI解析"):
-        st.session_state["ocr"] = ai_extract(img)
+        run_ai(img)
+        st.rerun()
 
-    ocr = st.session_state.get("ocr", {})
+ocr = st.session_state.get("ocr", {})
 
 # ===============================
-# 入力（★ここが修正ポイント）
+# 入力（AI反映済み）
 # ===============================
 store = st.text_input("店舗名", ocr.get("store",""))
 discount = st.text_input("割引", ocr.get("discount",""))
-category = st.selectbox("カテゴリ", ["飲食","物販","サービス","その他"])
+category = st.selectbox(
+    "カテゴリ",
+    ["飲食","物販","サービス","その他"],
+    index=["飲食","物販","サービス","その他"].index(
+        ocr.get("category","飲食")
+        if ocr.get("category") in ["飲食","物販","サービス","その他"]
+        else "飲食"
+    )
+)
+
 quantity = st.number_input("枚数", 1, 100, 1)
 
-# ★ここが修正ポイント（AI期限反映）
+# ★ ここが修正済み（AI期限が確実に反映）
 expiry = st.date_input(
     "期限",
     value=parse_ai_date(ocr.get("expiry", ""))
@@ -276,7 +292,6 @@ for item in data:
 
     used = item["used"]
     qty = item["quantity"]
-    remaining = qty - used
 
     try:
         d = datetime.strptime(item["expiry"], "%Y-%m-%d").date()
