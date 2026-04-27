@@ -4,25 +4,9 @@ import os
 from datetime import datetime
 import re
 from PIL import Image
+import base64
 import google.generativeai as genai
-
-# ===============================
-# UI設定
-# ===============================
-st.set_page_config(
-    page_title="クーポン管理",
-    layout="centered"
-)
-
-st.title("🎟 クーポン管理アプリ（画像サムネイル対応）")
-
-# ===============================
-# 保存先
-# ===============================
-DATA_FILE = "coupons.json"
-IMG_DIR = "images"
-
-os.makedirs(IMG_DIR, exist_ok=True)
+from io import BytesIO
 
 # ===============================
 # API初期化
@@ -31,36 +15,25 @@ GEMINI_OK = False
 
 try:
     api_key = st.secrets.get("GEMINI_API_KEY", None)
+
     if api_key:
         genai.configure(api_key=api_key)
         GEMINI_OK = True
-except:
-    pass
+    else:
+        st.error("APIキー未設定")
+except Exception as e:
+    st.error(f"APIエラー: {e}")
 
 # ===============================
-# データ読み込み（互換対応）
+# データ
 # ===============================
+DATA_FILE = "coupons.json"
+
 def load_data():
     if os.path.exists(DATA_FILE):
         try:
             with open(DATA_FILE, "r", encoding="utf-8") as f:
-                data = json.load(f)
-
-            # 旧データ救済
-            for d in data:
-                if "store" not in d:
-                    d["store"] = d.get("name", "不明")
-
-                if "image" not in d:
-                    d["image"] = ""
-
-                if "expiry" not in d:
-                    d["expiry"] = "2100-01-01"
-
-                if "quantity" not in d:
-                    d["quantity"] = 1
-
-            return data
+                return json.load(f)
         except:
             return []
     return []
@@ -70,170 +43,146 @@ def save_data(data):
         json.dump(data, f, ensure_ascii=False, indent=2)
 
 # ===============================
-# モデル取得
+# 画像 → Base64
 # ===============================
-def get_model():
-    try:
-        models = genai.list_models()
-        for m in models:
-            if "generateContent" in m.supported_generation_methods:
-                return m.name
-    except:
-        pass
-    return "models/gemini-1.5-pro-001"
+def image_to_base64(img):
+    buffer = BytesIO()
+    img.save(buffer, format="JPEG")
+    return base64.b64encode(buffer.getvalue()).decode()
+
+def base64_to_image(b64):
+    return Image.open(BytesIO(base64.b64decode(b64)))
 
 # ===============================
-# 画像保存（サムネイル化）
+# AI解析（安定版）
 # ===============================
-def save_image(image, store_name):
-    safe = re.sub(r"[^0-9a-zA-Zぁ-んァ-ン一-龥]", "_", store_name or "coupon")
-    filename = f"{safe}_{datetime.now().timestamp()}.jpg"
-    path = os.path.join(IMG_DIR, filename)
+def ai_from_image(image):
 
-    img = image.copy()
-    img.thumbnail((300, 300))
-    img.save(path, "JPEG", quality=70)
-
-    return path
-
-# ===============================
-# AI解析
-# ===============================
-def ai(image):
     if not GEMINI_OK:
+        st.error("AI使用不可")
         return None
 
-    model = genai.GenerativeModel(get_model())
-
     prompt = """
-クーポン画像から以下を抽出してください：
+この画像はクーポンです。
+以下の情報をJSON形式で出力してください。
 
-store（店舗名）
-discount（割引内容）
-expiry（YYYY-MM-DD）
+{
+ "store": "",
+ "discount": "",
+ "expiry": "YYYY-MM-DD"
+}
 
-JSONのみで返してください。
+JSONのみ出力。
 """
 
     try:
-        res = model.generate_content([prompt, image])
-        raw = res.text
+        model = genai.GenerativeModel("gemini-1.5-flash")
+
+        response = model.generate_content([prompt, image])
+
+        raw = response.text
+
+        st.text_area("AI生データ", raw, height=150)
 
         cleaned = re.sub(r"```json|```", "", raw).strip()
 
-        return json.loads(cleaned)
-    except:
+        data = json.loads(cleaned)
+
+        return data
+
+    except Exception as e:
+        st.error(f"AI解析失敗: {e}")
         return None
 
 # ===============================
-# 画像アップロード
+# UI
 # ===============================
-file = st.file_uploader("📸 クーポン画像")
+st.title("🎫 クーポン管理")
+
+file = st.file_uploader("画像アップ", type=["jpg","png","jpeg"])
+
+image = None
 
 if file:
     image = Image.open(file)
     st.image(image, use_container_width=True)
 
-    if st.button("⚡ AI解析"):
-        with st.spinner("解析中..."):
-            result = ai(image)
-
+    if st.button("AI解析"):
+        result = ai_from_image(image)
         if result:
-            st.session_state["draft"] = result
-            st.session_state["image"] = image
-            st.success("解析成功")
-        else:
-            st.error("解析失敗")
+            st.session_state["ocr"] = result
 
 st.divider()
 
-# ===============================
-# 入力フォーム
-# ===============================
-draft = st.session_state.get("draft", {})
-image = st.session_state.get("image", None)
+ocr = st.session_state.get("ocr", {})
 
-store = st.text_input("店舗名", draft.get("store", ""))
-discount = st.text_input("割引", draft.get("discount", ""))
-category = st.selectbox("カテゴリ", ["飲食", "物販", "サービス", "その他"])
+store = st.text_input("店舗名", value=ocr.get("store",""))
+discount = st.text_input("割引", value=ocr.get("discount",""))
 
-expiry = st.date_input("有効期限")
-qty = st.number_input("枚数", 1, 100, 1)
+expiry_default = datetime.today()
+if ocr.get("expiry"):
+    try:
+        expiry_default = datetime.strptime(ocr["expiry"], "%Y-%m-%d")
+    except:
+        pass
 
-# ===============================
-# 保存
-# ===============================
-if st.button("💾 保存"):
+expiry = st.date_input("期限", value=expiry_default)
 
-    image_path = ""
+if st.button("保存"):
 
-    if image is not None:
-        image_path = save_image(image, store)
+    img_b64 = None
+    if image:
+        img_b64 = image_to_base64(image)
 
     data = load_data()
 
     data.append({
         "store": store,
-        "category": category,
         "discount": discount,
-        "quantity": qty,
         "expiry": str(expiry),
-        "image": image_path,
-        "history": []
+        "image": img_b64
     })
 
     save_data(data)
 
-    st.session_state["draft"] = {}
-    st.session_state["image"] = None
-
-    st.success("保存しました")
+    st.success("保存OK")
     st.rerun()
 
-st.divider()
-
 # ===============================
-# 一覧（サムネイル表示）
+# 一覧
 # ===============================
-st.subheader("📋 クーポン一覧")
+st.subheader("一覧")
 
 data = load_data()
 today = datetime.today().date()
 
 for i, item in enumerate(data):
 
-    store_name = item.get("store", "不明")
+    exp_str = item.get("expiry","")
+    store = item.get("store","不明")
+    discount = item.get("discount","")
 
     try:
-        exp = datetime.strptime(item.get("expiry", "2100-01-01"), "%Y-%m-%d").date()
+        exp = datetime.strptime(exp_str, "%Y-%m-%d").date()
         days = (exp - today).days
     except:
         days = 999
 
-    col1, col2 = st.columns([1, 3])
+    if days < 0:
+        st.error(f"{store}（期限切れ）")
+    elif days < 7:
+        st.warning(f"{store}（あと{days}日）")
+    else:
+        st.success(f"{store}（{exp_str}）")
 
-    with col1:
-        if item.get("image") and os.path.exists(item["image"]):
-            st.image(item["image"], width=80)
-        else:
-            st.write("📄")
+    if item.get("image"):
+        st.image(base64_to_image(item["image"]), width=200)
 
-    with col2:
-        if days < 0:
-            st.error(f"⚠ {store_name}")
-        elif days < 7:
-            st.warning(f"⏳ {store_name}（{days}日）")
-        else:
-            st.success(store_name)
+    st.write(discount)
 
-        st.write(f"""
-💰 {item.get('discount','')}
-🔢 {item.get('quantity',1)}
-""")
-
-    if st.button("🗑 削除", key=f"d{i}"):
+    if st.button("削除", key=i):
         data.pop(i)
         save_data(data)
         st.rerun()
 
-    st.markdown("---")
+    st.divider()
