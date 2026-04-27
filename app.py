@@ -9,35 +9,15 @@ import google.generativeai as genai
 from io import BytesIO
 
 # ===============================
-# API初期化
+# API
 # ===============================
-GEMINI_OK = False
+genai.configure(api_key=st.secrets.get("GEMINI_API_KEY"))
 
-try:
-    api_key = st.secrets.get("GEMINI_API_KEY", None)
-
-    if api_key:
-        genai.configure(api_key=api_key)
-        GEMINI_OK = True
-    else:
-        st.error("APIキー未設定")
-except Exception as e:
-    st.error(f"APIエラー: {e}")
-
-# ===============================
-# モデル自動取得（最重要）
-# ===============================
 def get_model():
-    try:
-        models = genai.list_models()
-
-        for m in models:
-            if "generateContent" in str(m.supported_generation_methods):
-                return m.name
-
-    except Exception as e:
-        st.error(f"モデル取得失敗: {e}")
-
+    models = genai.list_models()
+    for m in models:
+        if "generateContent" in str(m.supported_generation_methods):
+            return m.name
     return None
 
 # ===============================
@@ -47,127 +27,107 @@ DATA_FILE = "coupons.json"
 
 def load_data():
     if os.path.exists(DATA_FILE):
-        try:
-            with open(DATA_FILE, "r", encoding="utf-8") as f:
-                return json.load(f)
-        except:
-            return []
+        return json.load(open(DATA_FILE, encoding="utf-8"))
     return []
 
 def save_data(data):
-    with open(DATA_FILE, "w", encoding="utf-8") as f:
-        json.dump(data, f, ensure_ascii=False, indent=2)
+    json.dump(data, open(DATA_FILE, "w", encoding="utf-8"), ensure_ascii=False, indent=2)
 
 # ===============================
-# 画像変換
+# 画像
 # ===============================
-def image_to_base64(img):
-    buffer = BytesIO()
-    img.save(buffer, format="JPEG")
-    return base64.b64encode(buffer.getvalue()).decode()
+def to_b64(img):
+    buf = BytesIO()
+    img.save(buf, format="JPEG")
+    return base64.b64encode(buf.getvalue()).decode()
 
-def base64_to_image(b64):
-    return Image.open(BytesIO(base64.b64decode(b64)))
+def from_b64(b):
+    return Image.open(BytesIO(base64.b64decode(b)))
 
 # ===============================
-# AI解析（最新版）
+# AI
 # ===============================
-def ai_from_image(image):
-
-    if not GEMINI_OK:
-        st.error("AI使用不可")
-        return None
+def ai_extract(img):
 
     model_name = get_model()
-
-    if not model_name:
-        st.error("モデル取得失敗")
-        return None
-
-    st.info(f"使用モデル: {model_name}")
+    model = genai.GenerativeModel(model_name)
 
     prompt = """
-この画像はクーポンです。
-以下をJSONで出力してください。
+クーポン画像です。
+以下をJSONで出力：
 
 {
- "store": "",
- "discount": "",
- "expiry": "YYYY-MM-DD"
+ "store":"",
+ "discount":"",
+ "expiry":"YYYY-MM-DD"
 }
 
-JSONのみ出力。
+JSONのみ
 """
 
+    res = model.generate_content([prompt, img])
+    raw = res.text
+
+    cleaned = re.sub(r"```json|```", "", raw).strip()
+
     try:
-        model = genai.GenerativeModel(model_name)
-
-        response = model.generate_content([prompt, image])
-
-        raw = response.text
-
-        st.text_area("AI生データ", raw, height=150)
-
-        cleaned = re.sub(r"```json|```", "", raw).strip()
-
         return json.loads(cleaned)
-
-    except Exception as e:
-        st.error(f"AI解析失敗: {e}")
-        return None
+    except:
+        return {}
 
 # ===============================
 # UI
 # ===============================
-st.title("🎫 クーポン管理")
+st.title("🎫 クーポン管理（完成版）")
 
 file = st.file_uploader("画像アップ", type=["jpg","png","jpeg"])
 
-image = None
+img = None
 
 if file:
-    image = Image.open(file)
-    st.image(image, use_container_width=True)
+    img = Image.open(file)
+    st.image(img)
 
     if st.button("AI解析"):
-        result = ai_from_image(image)
-        if result:
-            st.session_state["ocr"] = result
-
-st.divider()
+        st.session_state["ocr"] = ai_extract(img)
 
 ocr = st.session_state.get("ocr", {})
 
+# 入力欄
 store = st.text_input("店舗名", value=ocr.get("store",""))
 discount = st.text_input("割引", value=ocr.get("discount",""))
 
-expiry_default = datetime.today()
+# 追加項目
+category = st.selectbox("カテゴリ", ["飲食","物販","サービス","その他"])
+quantity = st.number_input("枚数", 1, 100, 1)
+
+# 日付
+exp_default = datetime.today()
 if ocr.get("expiry"):
     try:
-        expiry_default = datetime.strptime(ocr["expiry"], "%Y-%m-%d")
+        exp_default = datetime.strptime(ocr["expiry"], "%Y-%m-%d")
     except:
         pass
 
-expiry = st.date_input("期限", value=expiry_default)
+expiry = st.date_input("期限", value=exp_default)
 
+# 保存
 if st.button("保存"):
-
-    img_b64 = None
-    if image:
-        img_b64 = image_to_base64(image)
 
     data = load_data()
 
     data.append({
         "store": store,
         "discount": discount,
+        "category": category,
+        "quantity": quantity,
         "expiry": str(expiry),
-        "image": img_b64
+        "image": to_b64(img) if img else None
     })
 
     save_data(data)
 
-    st.success("保存OK")
+    st.success("保存")
     st.rerun()
 
 # ===============================
@@ -180,13 +140,15 @@ today = datetime.today().date()
 
 for i, item in enumerate(data):
 
-    exp_str = item.get("expiry","")
     store = item.get("store","不明")
     discount = item.get("discount","")
+    category = item.get("category","")
+    qty = item.get("quantity",1)
+    exp = item.get("expiry","")
 
     try:
-        exp = datetime.strptime(exp_str, "%Y-%m-%d").date()
-        days = (exp - today).days
+        d = datetime.strptime(exp,"%Y-%m-%d").date()
+        days = (d - today).days
     except:
         days = 999
 
@@ -195,16 +157,19 @@ for i, item in enumerate(data):
     elif days < 7:
         st.warning(f"{store}（あと{days}日）")
     else:
-        st.success(f"{store}（{exp_str}）")
+        st.success(f"{store}（{exp}）")
 
     if item.get("image"):
         try:
-            img = base64_to_image(item["image"])
-            st.image(img, width=200)
+            st.image(from_b64(item["image"]), width=200)
         except:
-            st.warning("画像表示エラー")
+            pass
 
-    st.write(discount)
+    st.write(f"""
+カテゴリ: {category}  
+枚数: {qty}  
+割引: {discount}
+""")
 
     if st.button("削除", key=i):
         data.pop(i)
