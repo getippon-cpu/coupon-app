@@ -14,7 +14,7 @@ import google.generativeai as genai
 genai.configure(api_key=st.secrets["GEMINI_API_KEY"])
 
 # ===============================
-# モデル取得
+# モデル取得（※変更なし）
 # ===============================
 def get_model():
     try:
@@ -127,13 +127,6 @@ def from_b64(b):
         return None
     return Image.open(BytesIO(base64.b64decode(b)))
 
-def rotate_b64(b64, angle):
-    img = from_b64(b64)
-    if img is None:
-        return b64
-    img = img.rotate(angle, expand=True)
-    return to_b64(img)
-
 # ===============================
 # JSON
 # ===============================
@@ -141,7 +134,7 @@ def safe_json(text):
     try:
         return json.loads(text)
     except:
-        m = re.search(r"\{.*\}", text, re.DOTALL)
+        m = re.search(r"\{.*?\}", text, re.DOTALL)
         if m:
             try:
                 return json.loads(m.group())
@@ -154,7 +147,6 @@ def safe_json(text):
 # ===============================
 def ai_extract(img):
 
-    # 🔴 連打防止キー（重要）
     if st.session_state.get("ai_running", False):
         st.warning("AI処理中です。少し待ってください")
         return {}
@@ -195,8 +187,19 @@ def ai_extract(img):
         return {}
 
     finally:
-        # 🔵 必ずロック解除
         st.session_state["ai_running"] = False
+
+# ===============================
+# 日付パース（追加）
+# ===============================
+def parse_date_safe(s):
+    try:
+        d = datetime.strptime(s, "%Y-%m-%d").date()
+        if d.year < 2000:  # 異常値ガード
+            return None
+        return d
+    except:
+        return None
 
 # ===============================
 # 初期化
@@ -236,7 +239,6 @@ if file:
     img = Image.open(file)
     st.image(img)
 
-    # 🔴 ここが連打防止の本体
     if st.button("🤖 AI解析", disabled=st.session_state.get("ai_running", False)):
         st.session_state["ocr"] = ai_extract(img)
 
@@ -245,11 +247,21 @@ ocr = st.session_state.get("ocr", {})
 # ===============================
 # 入力
 # ===============================
+ai_expiry = parse_date_safe(ocr.get("expiry", ""))
+
+if ai_expiry:
+    st.success(f"AIが期限を検出しました: {ai_expiry}")
+
 store = st.text_input("店舗名", ocr.get("store", ""))
 discount = st.text_input("割引", ocr.get("discount", ""))
 category = st.selectbox("カテゴリ", ["飲食", "物販", "サービス", "その他"])
 quantity = st.number_input("枚数", 1, 100, 1)
-expiry = st.date_input("期限")
+
+expiry = st.date_input(
+    "期限",
+    value=ai_expiry if ai_expiry else datetime.today().date()
+)
+
 note = st.text_area("備考", ocr.get("note", ""))
 
 # ===============================
